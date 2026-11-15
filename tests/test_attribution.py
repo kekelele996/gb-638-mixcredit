@@ -54,6 +54,22 @@ def test_linear_model_splits_evenly(settings):
     assert sum(row["gmv_cents"] for row in rows) == 10000
 
 
+def test_same_second_touches_break_ties_by_touch_id(settings):
+    order = make_order("O-1", 10000, "2026-11-05T13:00:00Z")
+    touches = [
+        make_touch(1, "TP-B", "2026-11-05T12:00:00Z", channel="douyin_feed"),
+        make_touch(2, "TP-A", "2026-11-05T12:00:00Z", channel="xhs_seed"),
+    ]
+    forward = service.attribute(settings, [order], touches, {"O-1": [1, 2]}, {})
+    backward = service.attribute(settings, [order], list(reversed(touches)),
+                                 {"O-1": [2, 1]}, {})
+    first = [row for row in forward["credits"] if row["model"] == "first"]
+    # TRAP-27 上游：同一秒按触点编号定序，首触点固定在 TP-A，与证据行序无关
+    assert [(row["touch_id"], row["channel"], row["gmv_cents"]) for row in first] == [
+        ("TP-A", "xhs_seed", 10000)]
+    assert forward["credits"] == backward["credits"]
+
+
 def test_position_model_uses_forty_forty_twenty():
     assert decay.position(4) == [Decimal("0.4"), Decimal("0.1"),
                                  Decimal("0.1"), Decimal("0.4")]

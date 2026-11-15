@@ -23,6 +23,7 @@ NAV = (
     ("/touchpoints", "触点与订单", "touchpoints"),
     ("/quarantine", "隔离区", "quarantine"),
     ("/attribution", "归因结果", "attribution"),
+    ("/confidence", "置信区间", "confidence"),
     ("/budgets", "预算与批次", "budgets"),
     ("/export", "导出", "export"),
 )

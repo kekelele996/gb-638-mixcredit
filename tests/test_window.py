@@ -67,6 +67,23 @@ def test_window_bounds_are_half_open():
     assert window.delta_days(order_time, start) == Decimal(7)
 
 
+def test_impression_window_left_edge_is_inclusive():
+    class Fake:
+        click_window = window.timedelta(days=7)
+        impression_window = window.timedelta(days=1)
+
+        def window_for(self, event_type):
+            return self.impression_window if event_type == "impression" else self.click_window
+
+    order_time = datetime(2026, 11, 6, 4, 0, tzinfo=timezone.utc)
+    start, end = window.bounds(order_time, "impression", Fake())
+    # TRAP-23：曝光窗口 1 天，左端计入；左端前一秒与右端都不计入
+    assert end - start == window.timedelta(days=1)
+    assert window.contains(start, end, start) is True
+    assert window.contains(start, end, start - window.timedelta(seconds=1)) is False
+    assert window.contains(start, end, end) is False
+
+
 def test_alias_merge_is_order_independent():
     rows = [
         {"alias_id": "d-77", "canonical_id": "u003"},

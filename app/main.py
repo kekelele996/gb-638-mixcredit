@@ -1,4 +1,4 @@
-"""应用装配：配置 → 存储 → 六个模块路由 → 六个页面。
+"""应用装配：配置 → 存储 → 七个模块路由 → 七个页面。
 
 用工厂函数而不是模块级实例，测试可以给每个用例一个临时库；
 uvicorn 通过模块级 __getattr__ 在第一次访问时构造 app，导入不会建库。
@@ -19,9 +19,12 @@ from .modules.m5_budgets import handler as m5_handler
 from .modules.m5_budgets import batches as m5_batches
 from .modules.m5_budgets import service as m5_service
 from .modules.m6_export import handler as m6_handler
+from .modules.m7_confidence import handler as m7_handler
+from .modules.m7_confidence import service as m7_service
 from .store import Store
 
-MODULES = (m1_handler, m2_handler, m3_handler, m4_handler, m5_handler, m6_handler)
+MODULES = (m1_handler, m2_handler, m3_handler, m4_handler, m5_handler, m6_handler,
+           m7_handler)
 
 
 def create_app(settings: config.Settings | None = None) -> FastAPI:
@@ -139,6 +142,36 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                           latest=budgets[0] if budgets else None,
                           next_version=store.next_plan_version(run["run_id"]),
                           batches=m5_batches.history(store, 12))
+
+    @app.get("/confidence")
+    def page_confidence(request: Request):
+        run = app.state.ctx.current_run()
+        query = request.query_params
+        model = query.get("model") or "time_decay"
+        if model not in m4_models.MODEL_CODES:
+            model = "time_decay"
+        form = {
+            "model": model,
+            "resamples": query.get("resamples") or str(m7_service.DEFAULT_RESAMPLES),
+            "seed": query.get("seed") or str(m7_service.DEFAULT_SEED),
+        }
+        if run is None:
+            return web.render(request, "confidence.html", active="confidence",
+                              result=None, form=form, error=None,
+                              models=m4_models.MODELS)
+        error = None
+        try:
+            result = m7_service.compute(settings, store, run["run_id"], model,
+                                        int(form["resamples"]), int(form["seed"]))
+        except errors.DomainError as exc:
+            result = m7_service.compute(settings, store, run["run_id"], model)
+            error = exc.message
+        except ValueError:
+            result = m7_service.compute(settings, store, run["run_id"], model)
+            error = "重采样次数与种子需为整数"
+        return web.render(request, "confidence.html", active="confidence",
+                          result=result, form=form, error=error,
+                          models=m4_models.MODELS)
 
     @app.get("/export")
     def page_export(request: Request):

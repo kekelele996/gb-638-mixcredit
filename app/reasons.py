@@ -32,6 +32,14 @@ _RAW = (
     ("FILE_HEADER_ONLY", 120, "仅有表头", "file"),
     ("FILE_BLANK_ROWS", 130, "全部为空行", "file"),
     ("ALIAS_BAD_ROW", 140, "别名行不完整", "alias"),
+    ("CI_DUP_ORDER_KEPT", 200, "同一订单号多行只算一次", "confidence"),
+    ("CI_FRAME_EMPTY", 210, "没有可重采样的订单", "confidence"),
+    ("CI_FRAME_THIN", 220, "订单簇少于 8 单", "confidence"),
+    ("CI_WIDE_INTERVAL", 230, "份额区间半宽超过 5 个百分点", "confidence"),
+    ("CI_UNSTABLE_RANK", 240, "首位渠道在重采样中不稳", "confidence"),
+    ("CI_INTERVAL_OVERLAP", 250, "前两渠道区间重叠", "confidence"),
+    ("CI_BUDGET_MISMATCH", 260, "预算首位与份额首位不一致", "confidence"),
+    ("CI_SAME_SECOND_TIE", 270, "同秒触点按编号定序", "confidence"),
     ("OUT_OF_WINDOW", 900, "不在归因窗口内", "window"),
 )
 
@@ -42,7 +50,8 @@ PRIORITY = {reason.code: reason.order for reason in REASONS}
 # 隔离区里展示的码是数据侧问题，窗口外只是不计入
 QUARANTINE_CODES = tuple(r.code for r in REASONS if r.scope in {"touch", "order", "alias"})
 
-LEVELS = {"touch": "隔离", "order": "隔离", "alias": "隔离", "file": "失败", "window": "不计入"}
+LEVELS = {"touch": "隔离", "order": "隔离", "alias": "隔离", "file": "失败",
+          "window": "不计入", "confidence": "结论"}
 
 
 def label(code: str) -> str:

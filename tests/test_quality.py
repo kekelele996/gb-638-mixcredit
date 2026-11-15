@@ -38,6 +38,20 @@ def test_identical_duplicate_keeps_first():
     assert flags["identical"] == {2}
 
 
+def test_identical_duplicate_order_keeps_first_row():
+    rows = [
+        {"row_no": 1, "raw_line": 2, "order_id": "O-9", "gmv_cents": 10000,
+         "order_time_utc": "2026-11-05T13:00:00Z"},
+        {"row_no": 2, "raw_line": 3, "order_id": "O-9", "gmv_cents": 10000,
+         "order_time_utc": "2026-11-05T13:00:00Z"},
+    ]
+    flags = rules.duplicate_flags("order", rows)
+    # TRAP-28 上游：内容相同的重复订单只留首条，另一条隔离，不两行都算成交
+    assert flags["conflict"] == set()
+    assert flags["identical"] == {2}
+    assert flags["identical_code"] == "OD_DUP_IDENTICAL"
+
+
 def test_late_touchpoint_is_counted_and_flagged(store, run_id):
     rows = {row["touch_id"]: row for row in store.touchpoints(run_id)}
     # TRAP-13：入库时间晚于下单的触点仍计入，但标记迟到

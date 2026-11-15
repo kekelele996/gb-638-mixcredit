@@ -8,6 +8,7 @@ PAGES = (
     ("/touchpoints", 'data-page="touchpoints"'),
     ("/quarantine", 'data-page="quarantine"'),
     ("/attribution", 'data-page="attribution"'),
+    ("/confidence", 'data-page="confidence"'),
     ("/budgets", 'data-page="budgets"'),
     ("/export", 'data-page="export"'),
 )
