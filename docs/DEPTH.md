@@ -1,0 +1,60 @@
+# 深度登记 mixcredit
+
+- 规模：中型（6 个功能模块，46 个 Python 文件，59 条测试）
+- 核心规则：触点按 `[t-窗口, t)` 归因到订单，五个模型各自合计必须等于订单成交额；预算按边际 ROI 贪心加档，受渠道上下限约束且分完等于总额。
+- 使用者与工作流：清野日化增长组 7 人，每周把六个渠道的触点与订单导入，先看触点是否计入、再看五个模型的渠道份额，最后按总额重排预算并把结果导出复核。
+
+## 功能模块
+
+| 模块 | 使用者动作 | 入口 | 核心文件 | 测试 |
+|---|---|---|---|---|
+| M1 触点接入 | 导入脏样例，看到逐行诊断与文件级状态 | POST /api/import | `app/modules/m1_ingest/service.py` `app/modules/m1_ingest/reader.py` `app/modules/m1_ingest/decode.py` `app/modules/m1_ingest/sniff.py` | `tests/test_ingest.py` |
+| M2 窗口与别名 | 查字段契约、窗口定义，确认跨设备合并 | GET /api/contract | `app/modules/m2_window/contract.py` `app/modules/m2_window/coerce.py` `app/modules/m2_window/window.py` `app/modules/m2_window/alias.py` | `tests/test_window.py` |
+| M3 质量隔离 | 看原因码分布、隔离行与四账 | GET /api/quarantine | `app/modules/m3_quality/rules.py` `app/modules/m3_quality/quarantine.py` `app/modules/m3_quality/service.py` | `tests/test_quality.py` |
+| M4 归因计算 | 切换五个模型，看渠道份额与 ROI | GET /api/attribution | `app/modules/m4_attribution/models.py` `app/modules/m4_attribution/decay.py` `app/modules/m4_attribution/allocate.py` | `tests/test_attribution.py` |
+| M5 预算重分配与批次 | 提交总额与方案版本，看新预算与版本历史 | POST /api/budgets | `app/modules/m5_budgets/greedy.py` `app/modules/m5_budgets/roi.py` `app/modules/m5_budgets/batches.py` | `tests/test_budgets.py` |
+| M6 报告导出 | 导出触点/订单/份额 CSV、整体 JSON 与运行清单 | GET /api/export.csv | `app/modules/m6_export/csv_out.py` `app/modules/m6_export/json_out.py` `app/modules/m6_export/manifest_out.py` | `tests/test_export.py` |
+
+## 陷阱登记
+
+| TRAP | 现象 | 朴素实现会怎样 | 本项目处理 | 处理位置 | 测试 |
+|---|---|---|---|---|---|
+| TRAP-01 | 别名文件是 GB18030 中文表头 | `open()` 直接崩或列名乱码 | 编码回退链 utf-8-sig → utf-8 → gb18030，并把实际编码写进清单 | `app/modules/m1_ingest/decode.py` | `tests/test_ingest.py::test_dirty_files_use_bom_and_gb18030_fallback` |
+| TRAP-02 | 触点文件带 UTF-8 BOM | 首列名变 `\ufefftouch_id`，后面按列名取值全空 | 用 utf-8-sig 解码并统一 strip BOM | `app/modules/m1_ingest/decode.py` | `tests/test_ingest.py::test_first_column_name_is_clean` |
+| TRAP-03 | 金额里有引号包住的逗号 | `splitlines()` 或按逗号切把一条记录拆成两条 | 用 csv 模块流式解析，保留物理行号 | `app/modules/m1_ingest/reader.py` | `tests/test_ingest.py::test_quoted_comma_keeps_one_record_per_line` |
+| TRAP-04 | 分段导出把表头又写了一遍 | 重复表头被当成一条数据行 | 识别重复表头并单独计数，不进数据行 | `app/modules/m1_ingest/reader.py` | `tests/test_ingest.py::test_duplicate_header_and_blank_line_are_not_data_rows` |
+| TRAP-05 | 行尾多了一个字段 | 静默补空或错列 | 严格列数校验，整行进隔离区带 `TD_COL_COUNT` | `app/modules/m2_window/service.py` | `tests/test_ingest.py::test_row_with_extra_column_is_quarantined` |
+| TRAP-06 | 成本写成 `1,234.50` 或全角数字 | `Decimal()` 崩或截断成错值 | NFKC 归一 + 去千分位 + 分取整 | `app/modules/m2_window/coerce.py` | `tests/test_ingest.py::test_thousands_and_fullwidth_amounts_parse` |
+| TRAP-08 | 触点编号带前导零 | `int()` 化后丢零，证据行对不上 | 编号全列按字符串保形 | `app/modules/m2_window/service.py` | `tests/test_ingest.py::test_leading_zero_touch_id_kept_as_string` |
+| TRAP-10 | 份额用浮点累加 | 1000 行合计差几分 | 金额一律整数分，拆分用整数运算 | `app/modules/m4_attribution/allocate.py` | `tests/test_attribution.py::test_five_models_conserve_order_gmv` |
+| TRAP-11 | 事件时间 `Z` 与 `+08:00` 混写 | 同一时刻落进两个窗口，重复或漏算 | 先归一 UTC 再判窗口，保留原始偏移 | `app/modules/m2_window/coerce.py` | `tests/test_window.py::test_two_timezone_forms_hit_same_instant` |
+| TRAP-13 | 入库时间晚于下单时间 | 水位线一推进就丢掉迟到触点 | 迟到仍计入并打 `late` 标记，证据行可查 | `app/modules/m2_window/window.py` | `tests/test_quality.py::test_late_touchpoint_is_counted_and_flagged` |
+| TRAP-14 | 同一触点编号渠道与成本冲突 | 后写覆盖，或整批丢弃 | 冲突组全部隔离；内容相同的只保留首条 | `app/modules/m3_quality/rules.py` | `tests/test_quality.py::test_duplicate_touch_id_conflict_quarantines_both` |
+| TRAP-16 | 末行没有换行且字段被切断 | 半行被当成有效触点 | 尾行完整性校验，半行隔离并标记文件截断 | `app/modules/m1_ingest/reader.py` | `tests/test_ingest.py::test_truncated_tail_line_is_rejected` |
+| TRAP-18 | 0 行 / 仅表头 / 全空行 | 一律返回"成功导入 0 行"，或除零 | 三种空态返回不同结论码 | `app/modules/m1_ingest/service.py` | `tests/test_ingest.py::test_three_empty_states_are_distinct` |
+| TRAP-19 | 一行同时命中渠道未知与事件未知 | 结果取决于规则书写顺序 | 原因码表带固定序号，取最小序号 | `app/reasons.py` | `tests/test_quality.py::test_reason_priority_is_independent_of_rule_order` |
+| TRAP-22 | 同一人有设备号、旧账号多个别名 | 合并顺序不同结果不同 | 并查集，代表元取等价类里字典序最小 | `app/modules/m2_window/alias.py` | `tests/test_window.py::test_alias_merge_is_order_independent` |
+| TRAP-23 | 触点正好落在窗口端点 | 两端都算，重复计入 | 半开区间 `[start, end)` | `app/modules/m2_window/window.py` | `tests/test_window.py::test_window_end_is_exclusive` |
+| TRAP-24 | 份额与预算各自四舍五入 | 分完合计不等于原额 | 整数分 + 最大余额法 | `app/modules/m5_budgets/greedy.py` | `tests/test_budgets.py::test_allocation_conserves_total` |
+| TRAP-26 | 旧方案版本覆盖新方案 | 后提交无条件覆盖 | 版本号必须等于当前最大版本 + 1，旧版本 409 | `app/modules/m5_budgets/batches.py` | `tests/test_budgets.py::test_stale_plan_version_rejected` |
+
+## 反例 / 不变量 / 端到端
+
+- 反例：`tests/test_attribution.py::test_naive_float_split_loses_a_cent` —— 逐份四舍五入合计只有 999 分，当前实现 1000 分。
+- 不变量：`tests/test_e2e.py::test_rerun_is_idempotent` —— 同输入重跑命中同一批次键，行数与四账不变。
+- 端到端：`tests/test_e2e.py::test_budget_to_export_flow` —— 导入 → 预算 v1 → 导出 JSON → 清单复算。
+
+## 对账规则
+
+- 触点：输入行数 = 计入 + 迟到 + 不计入；不计入 = 窗口外 + 隔离。
+- 订单：输入行数 = 有效 + 隔离。
+- 金额：每个模型的渠道份额合计 = 有效订单成交额合计（整数分，差额必须为 0）。
+- 预算：各渠道新预算合计 = 提交总额；每档加投后仍受渠道上下限约束。
+
+## 已知不覆盖
+
+- 归因窗口只按事件类型区分（点击 7 天、曝光 1 天），不做各渠道单独窗口。
+- 不做增量实验（对照组/PSA），只有观察数据上的归因与预算重排。
+- 订单退款与部分退款不参与计算，退款单会作为成交额计入。
+- 时区只处理带偏移与固定 +08:00 的无偏移写法，不处理夏令时地区。
+- 预算衰减系数是配置常量，不从历史数据估计。
